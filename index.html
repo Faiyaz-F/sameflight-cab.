@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SameFlight Cab</title>
+<style>
+:root{--bg:#faf9f4;--surface:#fff;--ink:#14213d;--muted:#5b6478;--line:#dcdacf;--yellow:#f6c400;--green:#0f7b4d;--green-bg:#e0f3e8}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1426;--surface:#172039;--ink:#f3f1e7;--muted:#a3adc4;--line:#2b3656;--green:#5fd39b;--green-bg:#123a2b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.5}
+main{max-width:560px;margin:0 auto;padding:22px 16px 60px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px}
+.brand i{width:34px;height:14px;background:repeating-linear-gradient(90deg,var(--yellow) 0 8px,var(--ink) 8px 16px);border-radius:3px}
+h1{font-size:clamp(32px,9vw,48px);line-height:1.05;margin:24px 0 8px;letter-spacing:-.02em}
+h2{font-size:20px;margin:22px 0 6px}
+.sub,.meta{color:var(--muted);font-size:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:12px}
+label{display:block;font-weight:600;font-size:14px;margin:14px 0 6px}
+input,select{width:100%;font:inherit;padding:11px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.chk{display:flex;gap:10px;align-items:center}.chk input{width:20px;height:20px}
+button{font:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
+.go{width:100%;margin-top:18px;padding:14px;border:0;border-radius:12px;background:var(--yellow);color:#14213d;font-weight:800;font-size:17px}
+.pick{padding:9px 14px;border-radius:10px;border:2px solid var(--ink);background:transparent;color:var(--ink);font-weight:600;white-space:nowrap}
+.pick:disabled{opacity:.5;cursor:default}
+.link{background:none;border:0;color:var(--muted);text-decoration:underline;padding:0}
+.rider{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.tag{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--green-bg);color:var(--green);margin:6px 4px 0 0}
+.fare{display:flex;justify-content:space-between;align-items:baseline;margin-top:8px}
+.big{font-size:30px;font-weight:800}.strike{color:var(--muted);text-decoration:line-through;margin-right:8px}
+.save{color:var(--green);font-weight:800}
+.ok{background:var(--green-bg);color:var(--green);border-radius:14px;padding:16px;margin-top:14px}
+.err{background:var(--yellow);color:#14213d;border-radius:10px;padding:10px 12px;margin-top:12px;font-weight:600}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:center}
+</style>
+</head>
+<body>
+<main><div class="brand"><i></i>SameFlight Cab</div><div id="view"></div></main>
+<script>
+const $=s=>document.querySelector(s), view=$("#view");
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money=n=>"₹"+Math.round(n/10)*10;
+const fmt=m=>String(Math.floor(m/60)%24).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
+let token=localStorage.getItem("sc_token");
+async function api(url,body){
+  const opt=body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{headers:{}};
+  if(token) opt.headers.Authorization="Bearer "+token;
+  const r=await fetch(url,opt); const j=await r.json();
+  if(r.status===401){localStorage.clear();location.reload();}
+  if(!r.ok) throw new Error(j.error||"Something went wrong"); return j;
+}
+let user=JSON.parse(localStorage.getItem("sc_user")||"null"), tripId=localStorage.getItem("sc_trip"), timer;
+const showErr=m=>{const e=document.createElement("div");e.className="err";e.textContent=m;view.append(e);setTimeout(()=>e.remove(),4000)};
+
+function loginView(){
+  clearInterval(timer);
+  view.innerHTML=`<h1>Landed together. Ride together.</h1>
+  <p class="sub">Find someone from your flight going the same way and split one cab fare.</p>
+  <div class="card" id="lc"><label for="n">Your name</label><input id="n" autocomplete="name">
+  <label for="p">Phone number</label><input id="p" inputmode="tel" placeholder="10 digits" autocomplete="tel">
+  <label class="chk"><input type="checkbox" id="w">I am a woman (needed for women-only rides)</label>
+  <button class="go" id="b">Send code</button></div>`;
+  $("#b").onclick=async()=>{try{
+    const phone=$("#p").value,name=$("#n").value,woman=$("#w").checked;
+    if(!name.trim()) return showErr("Enter your name.");
+    const r=await api("/api/otp/send",{phone});
+    codeView(phone,name,woman,r.dev_otp);
+  }catch(e){showErr(e.message)}};
+}
+function codeView(phone,name,woman,dev){
+  $("#lc").innerHTML=`<p>Enter the 6-digit code sent to ${esc(phone)}.</p>
+  ${dev?`<div class="err" style="margin-top:0">Test mode: your code is <b>${esc(dev)}</b></div>`:""}
+  <label for="c">Code</label><input id="c" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+  <button class="go" id="v">Verify and continue</button>
+  <p><button class="link" id="back">Change number</button></p>`;
+  $("#back").onclick=loginView;
+  $("#v").onclick=async()=>{try{
+    const r=await api("/api/otp/verify",{phone,code:$("#c").value,name,woman});
+    token=r.token;user=r.user;
+    localStorage.setItem("sc_token",token);localStorage.setItem("sc_user",JSON.stringify(user));
+    tripId=null;localStorage.removeItem("sc_trip");tripView();
+  }catch(e){showErr(e.message)}};
+}
+
+async function tripView(){
+  clearInterval(timer);
+  const areas=await api("/api/areas");
+  view.innerHTML=`<div class="top"><h2>Hi ${esc(user.name)}, where are you going?</h2><button class="link" id="out">Log out</button></div>
+  <div class="card"><label for="f">Flight number</label>
+  <div class="row" style="grid-template-columns:1fr auto"><input id="f" value="6E 204"><button class="pick" id="chk" type="button">Check flight</button></div>
+  <div class="meta" id="fs" aria-live="polite" style="margin-top:6px"></div>
+  <div class="row"><div><label for="d">Date</label><input id="d" type="date" value="${new Date().toLocaleDateString('en-CA')}"></div>
+  <div><label for="t">Landing time</label><input id="t" type="time" value="18:40"></div></div>
+  <label for="ds">Going to</label><select id="ds">${Object.keys(areas).map(a=>`<option>${a}</option>`).join("")}</select>
+  <label for="bg">Luggage</label><select id="bg"><option value="cabin">Cabin bag only</option><option value="check">Checked bags</option></select>
+  <label class="chk"><input type="checkbox" id="wo">Women-only ride</label>
+  <button class="go" id="b">Find riders on my flight</button></div>
+  <p class="meta">Landing time is typed in for now. A live flight-status API can fill it automatically.</p>`;
+  $("#out").onclick=logout;
+  $("#chk").onclick=async()=>{
+    const st=$("#fs"); st.textContent="Checking...";
+    try{
+      const r=await api(`/api/flight?number=${encodeURIComponent($("#f").value)}&date=${$("#d").value}`);
+      if(r.landing){
+        $("#t").value=r.landing;
+        st.textContent=`Landing ${r.landing}${r.delay>0?`, running ${r.delay} min late`:", on time"}${r.status?" · "+r.status:""}${r.source==="demo"?" (demo data)":""}${r.note?" · "+r.note:""}`;
+      }else st.textContent=r.note||"Flight not found. Type the landing time yourself.";
+    }catch(e){st.textContent=e.message}
+  };
+  $("#b").onclick=async()=>{try{
+    const r=await api("/api/trips",{user_id:user.id,flight:$("#f").value,date:$("#d").value,landing:$("#t").value,
+      dest:$("#ds").value,bags:$("#bg").value,women_only:$("#wo").checked});
+    tripId=r.id; localStorage.setItem("sc_trip",tripId); dash();
+  }catch(e){showErr(e.message)}};
+}
+function logout(){localStorage.clear();user=null;tripId=null;loginView()}
+
+function payHtml(r){
+  const each=money(r.fare_each), cash=r.pay_method==="cash", base=`/api/payments/${r.request_id}`;
+  if(r.pay_status==="confirmed") return `<div class="ok" style="margin-top:10px">Payment done (${cash?"cash":"UPI"}). ${r.role==="host"?"You confirmed you received "+each+".":esc(r.host_name)+" confirmed your payment."}</div>`;
+  const sw=(m,label)=>`<button class="pick" style="margin-top:10px;width:100%" data-pay="${base}/method" data-body='{"method":"${m}"}'>${label}</button>`;
+  if(r.role==="guest"){
+    if(cash) return `<div class="card"><b>Pay cash: ${each}</b><div class="meta">Hand ${each} in cash to ${esc(r.host_name)} in the cab. ${esc(r.host_name)} books and pays the cab (${money(r.total)} total) and will mark it received.</div>${r.pay_status==="unpaid"?sw("upi","Pay by UPI instead"):""}</div>`;
+    if(!r.host_upi) return `<div class="card"><b>Your share: ${each}</b><div class="meta">${esc(r.host_name)} has not added a UPI ID yet. You can wait, or pay cash in the cab.</div>${sw("cash","Pay cash instead")}</div>`;
+    const link=`upi://pay?pa=${encodeURIComponent(r.host_upi)}&pn=${encodeURIComponent(r.host_name)}&am=${r.fare_each}&cu=INR&tn=${encodeURIComponent("SameFlight Cab share")}`;
+    return `<div class="card"><b>Pay your share: ${each}</b>
+      <div class="meta">To ${esc(r.host_name)} · UPI ID <b>${esc(r.host_upi)}</b>. ${esc(r.host_name)} books and pays the cab (${money(r.total)} total).</div>
+      ${r.pay_status==="marked_paid"?`<p class="meta">You marked this as paid. Waiting for ${esc(r.host_name)} to confirm.</p>`:`<a class="go" style="display:block;text-align:center;text-decoration:none" href="${link}">Pay ${each} with UPI app</a>
+      <button class="pick" style="margin-top:10px;width:100%" data-pay="${base}/paid">I have paid</button>${sw("cash","Pay cash instead")}`}
+      <div class="meta" style="margin-top:8px">The UPI button opens on a phone. On a computer, copy the UPI ID and pay from your phone. This app does not handle the money.</div></div>`;
+  }
+  const needUpi=!r.my_upi&&!cash;
+  return `<div class="card"><b>You book and pay the cab (${money(r.total)})</b>
+    <div class="meta">${cash?`${esc(r.partner)} chose cash. Collect <b>${each}</b> in the cab.`:`${esc(r.partner)} will send you <b>${each}</b>${r.my_upi?" at "+esc(r.my_upi):""}, or pay cash.`}${r.pay_status==="marked_paid"?" They say they have paid.":""}</div>
+    ${needUpi?`<label for="ui">Your UPI ID (so ${esc(r.partner)} can pay you)</label><input id="ui" placeholder="name@bank"><button class="go" id="su" style="margin-top:10px">Save UPI ID</button>`:""}
+    <button class="pick" style="margin-top:10px;width:100%" data-pay="${base}/confirm">I received ${each}</button></div>`;
+}
+async function dash(){
+  clearInterval(timer);
+  const draw=async()=>{
+    let s; try{s=await api("/api/trips/"+tripId)}catch(e){localStorage.removeItem("sc_trip");tripId=null;return tripView()}
+    if(["nl","ui"].includes(document.activeElement&&document.activeElement.id))return;
+    const t=s.trip, late=t.landing-(t.planned??t.landing);
+    let h=`<div class="top"><h2>${esc(t.flight)} to ${esc(t.dest)}</h2><span><button class="link" id="nt">New trip</button> · <button class="link" id="out">Log out</button></span></div>
+    <p class="meta">Landing ${fmt(t.landing)} on ${esc(t.date)}${late>0?` (${late} min late)`:""} · Solo cab ≈ ${money(s.solo_fare)}${t.women_only?" · Women-only":""}</p>
+    ${late>0?`<div class="err" style="margin-top:6px">Your flight is ${late} min late. Pickup time and matches are updated.</div>`:""}
+    <p class="meta">Flight early or late? <input id="nl" type="time" value="${fmt(t.landing)}" style="width:auto;padding:6px"> <button class="pick" id="ul" style="padding:5px 10px">Update</button></p>`;
+    if(s.ride){const r=s.ride;
+      h+=`<div class="ok"><b>Ride confirmed with ${esc(r.partner)}</b><br>Going to ${esc(r.dest)} · You each pay <b>${money(r.fare_each)}</b> (saves ${money(s.solo_fare-r.fare_each)})<br>Meet at Gate 2 pickup around <b>${fmt(r.pickup)}</b>${r.partner_late>0?`<br>${esc(r.partner)}'s flight is ${r.partner_late} min late, so pickup moved.`:""}<br>Call ${esc(r.partner)}: <a href="tel:${esc(r.phone)}">${esc(r.phone)}</a></div>${payHtml(r)}`;
+    }else{
+      if(s.incoming.length){h+=`<h2>Requests for you</h2>`+s.incoming.map(r=>`<div class="card rider"><div><b>${esc(r.name)}</b> → ${esc(r.dest)}<div class="meta">Flight ${esc(r.flight)}</div></div><button class="pick" data-acc="${r.id}">Accept</button></div>`).join("")}
+      h+=`<h2>${s.matches.length?s.matches.length+" possible "+(s.matches.length>1?"riders":"rider"):"No match yet"}</h2>`;
+      if(!s.matches.length)h+=`<div class="card meta">Nobody going near ${esc(t.dest)} yet. This page checks again every few seconds.</div>`;
+      h+=s.matches.map(m=>`<div class="card"><div class="rider"><div><b>${esc(m.name)}</b> → ${esc(m.dest)}
+        <div class="meta">${esc(m.flight)} · lands ${fmt(m.landing)} · ${m.bags=="check"?"checked bags":"cabin bag"}</div>
+        ${m.same_flight?'<span class="tag">Same flight</span>':''}<span class="tag">+${m.detour} min detour</span>${m.woman?'<span class="tag">Woman rider</span>':''}</div>
+        <button class="pick" data-req="${m.trip_id}" ${m.requested?"disabled":""}>${m.requested?"Requested":"Share cab"}</button></div>
+        <div class="fare"><div><span class="strike">${money(s.solo_fare)}</span><span class="big">${money(m.fare_each)}</span></div><span class="save">Save ${money(s.solo_fare-m.fare_each)}</span></div></div>`).join("");
+    }
+    view.innerHTML=h;
+    $("#nt").onclick=()=>{localStorage.removeItem("sc_trip");tripId=null;tripView()}; $("#out").onclick=logout;
+    $("#ul").onclick=async()=>{try{await api(`/api/trips/${tripId}/landing`,{landing:$("#nl").value});draw()}catch(e){showErr(e.message)}};
+    view.querySelectorAll("[data-pay]").forEach(b=>b.onclick=async()=>{try{await api(b.dataset.pay,JSON.parse(b.dataset.body||"{}"));draw()}catch(e){showErr(e.message)}});
+    const su=$("#su"); if(su) su.onclick=async()=>{try{await api("/api/profile",{upi_id:$("#ui").value});draw()}catch(e){showErr(e.message)}};
+    view.querySelectorAll("[data-req]").forEach(b=>b.onclick=async()=>{await api("/api/requests",{from_trip:+tripId,to_trip:+b.dataset.req});draw()});
+    view.querySelectorAll("[data-acc]").forEach(b=>b.onclick=async()=>{try{await api(`/api/requests/${b.dataset.acc}/accept`,{});draw()}catch(e){showErr(e.message)}});
+  };
+  await draw(); timer=setInterval(draw,5000);
+}
+user&&token?(tripId?dash():tripView()):loginView();
+</script>
+</body>
+</html>
